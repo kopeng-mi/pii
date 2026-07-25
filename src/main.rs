@@ -11,6 +11,38 @@ use rusqlite::Connection;
 use std::io::{self, Write};
 use std::process::Command;
 
+#[cfg(windows)]
+fn which_exists(cmd: &str) -> bool {
+    // Mirror std's Command search: walk PATH and check each dir for `cmd` with
+    // PATHEXT extensions. If cmd already has an extension, only that one is tried.
+    let has_ext = std::path::Path::new(cmd).extension().is_some();
+    let exts: Vec<String> = if has_ext {
+        vec![String::new()]
+    } else {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.BAT;.CMD".into())
+            .split(';')
+            .map(|s| s.to_string())
+            .collect()
+    };
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            for ext in &exts {
+                let candidate = dir.join(format!("{}{}", cmd, ext));
+                if candidate.is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn which_exists(_cmd: &str) -> bool {
+    true
+}
+
 /// Print a styled prompt to stderr and read a single line from stdin.
 fn prompt_input(question: &str, default: Option<&str>) -> io::Result<String> {
     eprint!("  \x1b[38;5;246m{}\x1b[0m ", question);
@@ -378,7 +410,13 @@ fn main() -> rusqlite::Result<()> {
                 "  \x1b[38;5;43m▰\x1b[0m Resuming session \x1b[38;5;246m{}\x1b[0m",
                 selection.file_path
             );
-            let status = Command::new("pi")
+            // Try a few Windows-specific candidates first; fall back to bare "pi".
+            let pi = ["pi.cmd", "pi.exe", "pi.bat", "pi"]
+                .iter()
+                .find(|c| which_exists(c))
+                .copied()
+                .unwrap_or("pi");
+            let status = Command::new(pi)
                 .arg("--session")
                 .arg(&selection.file_path)
                 .status();
