@@ -2,7 +2,17 @@ use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 
 pub fn get_db_path() -> PathBuf {
-    PathBuf::from("pii.db")
+    // OS-conventional per-user app data dir:
+    //   Windows: %LOCALAPPDATA%\pii\pii.db
+    //   Linux:   ~/.local/share/pii/pii.db
+    //   macOS:   ~/Library/Application Support/pii/pii.db
+    // Falls back to CWD if even that isn't resolvable.
+    let mut p = dirs::data_local_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    p.push("pii");
+    p.push("pii.db");
+    p
 }
 
 pub fn init_db(conn: &Connection) -> Result<()> {

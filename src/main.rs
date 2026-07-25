@@ -189,6 +189,9 @@ fn main() -> rusqlite::Result<()> {
     let cli = Cli::parse();
 
     let db_path = db::get_db_path();
+    if let Some(parent) = db_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let conn = Connection::open(&db_path)?;
     db::init_db(&conn)?;
 
