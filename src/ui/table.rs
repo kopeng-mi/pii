@@ -1,5 +1,4 @@
 use rusqlite::Connection;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn print_sessions(
     conn: &Connection,
@@ -35,7 +34,8 @@ pub fn print_sessions(
     if let Some(query) = search_query {
         from_clause =
             "sessions JOIN sessions_fts ON sessions.rowid = sessions_fts.rowid".to_string();
-        where_clauses.push(format!("sessions_fts MATCH '{}'", query.replace("'", "''")));
+        // Support searching across prompts, project names, and model names
+        where_clauses.push(format!("sessions_fts MATCH '\"{}*\"'", query.replace("'", "''")));
     }
 
     let where_clause = if where_clauses.is_empty() {
@@ -46,7 +46,7 @@ pub fn print_sessions(
 
     let sql = format!("
         SELECT sessions.id, sessions.project, sessions.date, sessions.time, sessions.total_calls, sessions.total_tokens, sessions.total_cost, sessions.errors,
-            (SELECT model FROM calls WHERE session_id = sessions.id ORDER BY id DESC LIMIT 1) as last_model
+            COALESCE(sessions.last_model, '') as last_model
         FROM {}
         {}
         ORDER BY {} {}", from_clause, where_clause, order, limit_clause);
@@ -98,10 +98,10 @@ pub fn print_sessions(
     );
 
     let header =
-        "  when          project   model                  calls  usage            cost   err";
-    println!("\x1b[38;5;246m{}\x1b[0m", header);
+        "  \x1b[38;5;246mwhen          project   model                 calls  usage           cost   err\x1b[0m";
+    println!("{}", header);
     println!(
-        "\x1b[38;5;237m  ─────────────────────────────────────────────────────────────────────────────────\x1b[0m"
+        "  \x1b[38;5;237m─────────────────────────────────────────────────────────────────────────────────\x1b[0m"
     );
 
     for (_, project, date, time, calls, tokens, cost, errors, model) in sessions {
@@ -116,9 +116,10 @@ pub fn print_sessions(
             format!("{:>4}", calls)
         };
         let cost_fmt = if cost == 0.0 {
-            "  --  ".to_string()
+            "   -- ".to_string()
         } else {
-            format!("${:>5.2}", cost)
+            // 7-char column: $X.XX / $XX.XX / $XXX.XX all fit, left-padded with spaces.
+            format!("${:>6.2}", cost)
         };
         let err_fmt = if errors == 0 {
             "\x1b[38;5;242m·\x1b[0m".to_string()
@@ -131,17 +132,61 @@ pub fn print_sessions(
 
         let usage_label = if tokens >= 1_000_000 {
             format!("{:>4.1}M", tokens as f64 / 1_000_000.0)
-        } else {
+        } else if tokens >= 1_000 {
             format!("{:>4.0}K", tokens_k)
+        } else {
+            format!("{:>5}", tokens) // raw tokens
         };
         let usage_fmt = format!("{} {}", bar, usage_label);
 
         println!(
-            "  \x1b[38;5;250m{when}\x1b[0m   \x1b[1m{proj_fmt}\x1b[0m   \x1b[38;5;114m{model_fmt}\x1b[0m  {calls_fmt}   {usage_fmt}   \x1b[38;5;220m{cost_fmt}\x1b[0m   {err_fmt}"
+            "  \x1b[38;5;250m{when}\x1b[0m   \x1b[1m{proj_fmt}\x1b[0m   \x1b[38;5;114m{model_fmt}\x1b[0m  {calls_fmt}  {usage_fmt}  \x1b[38;5;220m{cost_fmt}\x1b[0m   {err_fmt}"
         );
     }
+    
+    println!(
+        "  \x1b[38;5;237m───────────────────────────────────── end ─────────────────────────────────────\x1b[0m"
+    );
     println!();
     Ok(())
+}
+
+/// Count visible character width of a string, ignoring ANSI escape sequences.
+pub fn ansi_visible_len(s: &str) -> usize {
+    let mut count = 0usize;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip the entire CSI/OSC sequence
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for nc in chars.by_ref() {
+                    if ('@'..='~').contains(&nc) { break; }
+                }
+            } else {
+                // Generic ESC: skip until we hit an alphabetic terminator
+                for nc in chars.by_ref() {
+                    if nc.is_ascii_alphabetic() { break; }
+                }
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Right-pad an ANSI-colored string to `width` visible chars with spaces.
+pub fn pad_end_ansi(s: &str, width: usize) -> String {
+    let visible = ansi_visible_len(s);
+    if visible >= width {
+        s.to_string()
+    } else {
+        let mut out = String::with_capacity(s.len() + (width - visible));
+        out.push_str(s);
+        for _ in 0..(width - visible) { out.push(' '); }
+        out
+    }
 }
 
 pub fn compact_num(n: u64) -> String {
@@ -155,11 +200,11 @@ pub fn compact_num(n: u64) -> String {
 }
 
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.width() > max {
+    if s.chars().count() > max {
         let mut truncated = String::new();
         let mut width = 0;
         for c in s.chars() {
-            let w = c.width().unwrap_or(0);
+            let w = 1;
             if width + w > max - 1 {
                 break;
             }

@@ -6,10 +6,12 @@ pub struct SessionRow {
     pub date: String,
     pub time: String,
     pub prompt: String,
+    pub models: String,
     pub total_calls: u32,
     pub total_tokens: u32,
     pub total_cost: f64,
     pub errors: u32,
+    pub last_model: String,
 }
 
 pub struct CallRow {

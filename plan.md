@@ -449,7 +449,7 @@ Directory per project (path-encoded), JSONL files per session.
 
 **Test:** `cargo run -- model claude` shows card. `cargo run -- model` opens picker.
 
-### Phase 5 — Comparison + Spider Chart
+### Phase 5 — Comparison + Spider Chart (Completed)
 
 **Delivers:** `pii compare [models...]`, `pii compare --spider`
 

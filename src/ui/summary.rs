@@ -1,9 +1,40 @@
-use crate::ui::table::compact_num;
+use crate::ui::table::{compact_num, make_bar, pad_end_ansi};
 use rusqlite::Connection;
+
+/// Total visible width of the box including corners.
+/// Layout: ┌─ title ─...─┐
+///        │  content    │   (content padded to BOX_WIDTH - 2)
+///        └─────────────┘
+const BOX_WIDTH: usize = 60;
+
+fn box_top(title: &str) {
+    // ┌─ title ─...─┐   total visible = BOX_WIDTH
+    let overhead = "┌─ ".len() + 1; // = 4  (trailing space before dashes)
+    let after = BOX_WIDTH - 1 - overhead - title.len(); // -1 for ┐
+    println!(
+        "  \x1b[38;5;246m┌─ {} {}\x1b[0m",
+        title,
+        "─".repeat(after)
+    );
+}
+
+fn box_row(content: String) {
+    println!(
+        "  \x1b[38;5;246m│\x1b[0m{}\x1b[38;5;246m│\x1b[0m",
+        pad_end_ansi(&content, BOX_WIDTH - 2)
+    );
+}
+
+fn box_bottom() {
+    println!(
+        "  \x1b[38;5;246m└{}┘\x1b[0m",
+        "─".repeat(BOX_WIDTH - 2)
+    );
+}
 
 pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
     let sql = "
-        SELECT 
+        SELECT
             COUNT(id) as total_sessions,
             SUM(total_calls) as total_calls,
             SUM(total_tokens) as total_tokens,
@@ -15,11 +46,11 @@ pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query([])?;
 
-    let mut total_sess = 0;
-    let mut total_call = 0;
-    let mut total_toks = 0;
-    let mut total_c = 0.0;
-    let mut total_errs = 0;
+    let mut total_sess: u32 = 0;
+    let mut total_call: u32 = 0;
+    let mut total_toks: u32 = 0;
+    let mut total_c: f64 = 0.0;
+    let mut total_errs: u32 = 0;
 
     if let Some(row) = rows.next()? {
         total_sess = row.get::<_, u32>(0).unwrap_or(0);
@@ -34,13 +65,34 @@ pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
         return Ok(());
     }
 
+    // Today's stats
+    let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let today_sql = "SELECT COUNT(id), COALESCE(SUM(total_calls),0), COALESCE(SUM(total_tokens),0), COALESCE(SUM(total_cost),0) FROM sessions WHERE date = ?1";
+    let mut today_stmt = conn.prepare(today_sql)?;
+    let (today_sess, today_calls, today_toks, today_cost): (u32, u32, u32, f64) =
+        today_stmt.query_row([&today_str], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+
+    // Active days count for averages
+    let active_days: u32 = conn.query_row(
+        "SELECT COUNT(DISTINCT date) FROM sessions", [], |r| r.get(0),
+    )?;
+    let avg_daily_sess = if active_days > 0 { total_sess as f64 / active_days as f64 } else { 0.0 };
+    let avg_daily_cost = if active_days > 0 { total_c / active_days as f64 } else { 0.0 };
+
+    // Most active project
+    let top_project: Option<(String, u32)> = conn.prepare(
+        "SELECT project, COUNT(*) as cnt FROM sessions GROUP BY project ORDER BY cnt DESC LIMIT 1"
+    )?.query_row([], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+
     // Top models
     let top_models_sql = "
         SELECT model, COUNT(*) as call_count, SUM(tokens) as token_count, SUM(cost) as model_cost
         FROM calls
         GROUP BY model
         ORDER BY call_count DESC
-        LIMIT 3
+        LIMIT 5
     ";
 
     let mut stmt_m = conn.prepare(top_models_sql)?;
@@ -55,31 +107,74 @@ pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
         top_models.push((m, c, t, mc));
     }
 
-    println!("\n  \x1b[38;5;43m━━\x1b[0m \x1b[1mSummary Dashboard\x1b[0m\n");
+    let max_model_calls = top_models.first().map(|m| m.1).unwrap_or(1);
 
-    println!("  \x1b[38;5;246mAll Time Totals\x1b[0m");
-    println!("  \x1b[38;5;237m────────────────────────────────────────────────────\x1b[0m");
-    println!(
-        "  \x1b[1mSessions:\x1b[0m {:<10} \x1b[1mCalls:\x1b[0m {:<10}",
+    // ── Header ──
+    println!("\n  \x1b[38;5;43m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
+    println!("  \x1b[38;5;43m◈\x1b[0m \x1b[1mSummary Dashboard\x1b[0m");
+    println!("  \x1b[38;5;43m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
+
+    // ── All Time ──
+    box_top("All Time");
+    box_row(format!(
+        "  \x1b[38;5;43m◈\x1b[0m Sessions  \x1b[1m{}\x1b[0m    \x1b[38;5;220m⚡\x1b[0m Calls    \x1b[1m{}\x1b[0m",
         total_sess, total_call
-    );
-    println!(
-        "  \x1b[1mTokens:  \x1b[0m {:<10} \x1b[1mCost: \x1b[0m ${:<9.2}",
-        compact_num(total_toks as u64),
-        total_c
-    );
-    println!("  \x1b[1mErrors:  \x1b[0m {:<10}", total_errs);
+    ));
+    box_row(format!(
+        "  \x1b[38;5;114m◆\x1b[0m Tokens    \x1b[1m{}\x1b[0m    \x1b[38;5;220m$\x1b[0m Cost      \x1b[1m\x1b[38;5;220m${:.2}\x1b[0m",
+        compact_num(total_toks as u64), total_c
+    ));
+    if total_errs > 0 {
+        box_row(format!(
+            "  \x1b[38;5;196m✗\x1b[0m Errors    \x1b[38;5;196m{}\x1b[0m",
+            total_errs
+        ));
+    }
+    if let Some((proj, cnt)) = &top_project {
+        box_row(format!(
+            "  \x1b[38;5;43m▸\x1b[0m Top Proj  \x1b[1m{}\x1b[0m \x1b[38;5;242m({} sessions)\x1b[0m",
+            crate::ui::table::truncate(proj, 18), cnt
+        ));
+    }
+    box_bottom();
+    println!();
 
-    println!("\n  \x1b[38;5;246mTop Models\x1b[0m");
-    println!("  \x1b[38;5;237m────────────────────────────────────────────────────\x1b[0m");
-    for (m, calls, tokens, cost) in top_models {
-        let model_fmt = crate::ui::table::truncate(&m, 20);
+    // ── Today vs Average ──
+    box_top("Today vs Daily Avg");
+    let today_marker = if today_sess as f64 > avg_daily_sess { "\x1b[38;5;43m▲\x1b[0m" } else if today_sess == 0 { "\x1b[38;5;242m·\x1b[0m" } else { "\x1b[38;5;246m▸\x1b[0m" };
+    box_row(format!(
+        "  {} Sessions  \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {:.1} avg/day\x1b[0m",
+        today_marker, today_sess, avg_daily_sess
+    ));
+    box_row(format!(
+        "    Calls      \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {} tokens\x1b[0m",
+        today_calls, compact_num(today_toks as u64)
+    ));
+    let cost_marker = if today_cost > avg_daily_cost && today_cost > 0.0 { "\x1b[38;5;220m▲\x1b[0m" } else { " " };
+    box_row(format!(
+        "  {} Cost       \x1b[38;5;220m${:.2}\x1b[0m \x1b[38;5;242mtoday\x1b[0m \x1b[38;5;242m/ ${:.2} avg/day\x1b[0m",
+        cost_marker, today_cost, avg_daily_cost
+    ));
+    box_bottom();
+    println!();
+
+    // ── Top Models ──
+    println!("  \x1b[38;5;246mTop Models\x1b[0m");
+    println!("  \x1b[38;5;237m────────────────────────────────────────────────────────\x1b[0m");
+    for (i, (m, calls, tokens, cost)) in top_models.iter().enumerate() {
+        let model_fmt = crate::ui::table::truncate(m, 20);
+        let rank_icon = match i {
+            0 => "\x1b[38;5;220m◆\x1b[0m",
+            1 => "\x1b[38;5;246m◆\x1b[0m",
+            2 => "\x1b[38;5;130m◆\x1b[0m",
+            _ => "\x1b[38;5;237m·\x1b[0m",
+        };
+        let bar = make_bar(*calls as f64, max_model_calls as f64, 8);
+        let cost_fmt = format!("${:>6.2}", cost);
+        let tokens_str = compact_num(*tokens as u64);
         println!(
-            "  \x1b[38;5;114m{:<20}\x1b[0m │ {:>5} calls │ {:>6} tk │ \x1b[38;5;220m${:>5.2}\x1b[0m",
-            model_fmt,
-            calls,
-            compact_num(tokens as u64),
-            cost
+            "  {} \x1b[38;5;114m{:<20}\x1b[0m  {} {:>5} calls  {:>6} tk  \x1b[38;5;220m{}\x1b[0m",
+            rank_icon, model_fmt, bar, calls, tokens_str, cost_fmt
         );
     }
     println!();

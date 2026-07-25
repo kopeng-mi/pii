@@ -3,18 +3,20 @@ use crate::ui::picker::{pick, Selection};
 use crate::ui::table::compact_num;
 
 pub fn format_model_item(m: &UnifiedModel) -> (Selection, String) {
-    let speed = m.speed_tok_s.map(|s| format!("{:>3.0}", s)).unwrap_or_else(|| " --".to_string());
-    let context = m.context_window.map(|c| compact_num(c as u64)).unwrap_or_else(|| " -- ".to_string());
+    let speed = m.speed_tok_s.map(|s| format!("{:>3.0} t/s", s)).unwrap_or_else(|| " -- ".to_string());
+    let context = m.context_window.map(|c| format!("{}k", c / 1000)).unwrap_or_else(|| " -- ".to_string());
     let price_str = if m.input_price > 0.0 || m.output_price > 0.0 {
         format!("${:.2}/${:.2}", m.input_price, m.output_price)
     } else {
         "--/--".to_string()
     };
+    let date_str = if m.release_date.is_empty() { " --    ".to_string() } else { m.release_date.clone() };
     
     let display = format!(
-        "\x1b[38;5;114m{:<25}\x1b[0m  {:<15}  \x1b[38;5;220m{:<12}\x1b[0m  {:>4}k  {} t/s",
+        "{}  {:<25}  {:<14}  {:<10}  {:>6}  {:>7}",
+        date_str,
         crate::ui::table::truncate(&m.name, 25),
-        crate::ui::table::truncate(&m.creator, 15),
+        crate::ui::table::truncate(&m.creator, 14),
         price_str,
         context,
         speed
@@ -27,12 +29,19 @@ pub fn format_model_item(m: &UnifiedModel) -> (Selection, String) {
 }
 
 pub fn run_model_picker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<String>> {
+    run_model_picker_with_prompt(conn, "model")
+}
+
+pub fn run_model_picker_with_prompt(
+    conn: &rusqlite::Connection,
+    prompt: &str,
+) -> rusqlite::Result<Option<String>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, creator, release_date, context_window, param_count, input_price, output_price, speed_tok_s, ttft_s, open_weight, source, raw_json 
-         FROM models 
-         ORDER BY name ASC"
+        "SELECT id, name, creator, release_date, context_window, param_count, input_price, output_price, speed_tok_s, ttft_s, open_weight, source, raw_json
+         FROM models
+         ORDER BY (release_date = '' OR release_date IS NULL) ASC, release_date DESC, name ASC"
     )?;
-    
+
     let items = stmt.query_map([], |row| {
         let m = UnifiedModel {
             id: row.get(0)?,
@@ -57,7 +66,7 @@ pub fn run_model_picker(conn: &rusqlite::Connection) -> rusqlite::Result<Option<
         return Ok(None);
     }
 
-    match pick(items, "model") {
+    match pick(conn, items, prompt) {
         Ok(Some(sel)) => Ok(Some(sel.id)),
         _ => Ok(None)
     }

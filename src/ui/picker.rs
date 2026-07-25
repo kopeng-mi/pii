@@ -3,7 +3,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     queue,
-    style::{Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+    style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
 use nucleo::{
@@ -46,12 +46,15 @@ pub fn run_picker(
     days: Option<u32>,
     prompt: &str,
 ) -> rusqlite::Result<Option<Selection>> {
+    // Pull a wider candidate set; the picker will refine via FTS + fuzzy at
+    // keystroke time. Cap rows so we don't materialize tens of thousands on
+    // startup. Increase this once `--all` lands.
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, project, date, time, prompt, total_calls, total_tokens, total_cost,
-                COALESCE((SELECT model FROM calls WHERE session_id = sessions.id ORDER BY id DESC LIMIT 1), 'unknown')
+        "SELECT id, file_path, project, date, time, prompt, total_calls, total_tokens, total_cost, last_model
          FROM sessions
          WHERE (?1 IS NULL OR date >= date('now', '-' || ?1 || ' days'))
-         ORDER BY date, time",
+         ORDER BY date DESC, time DESC
+         LIMIT 5000",
     )?;
     let items = stmt
         .query_map([days], |row| {
@@ -92,10 +95,14 @@ pub fn run_picker(
         return Ok(None);
     }
 
-    pick(items, prompt).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))
+    pick(conn, items, prompt).map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))
 }
 
-pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<Selection>> {
+pub fn pick(
+    conn: &Connection,
+    items: Vec<(Selection, String)>,
+    prompt: &str,
+) -> io::Result<Option<Selection>> {
     let mut stdout = io::stdout();
     let _guard = TerminalGuard::enter(&mut stdout)?;
     let (width, height) = terminal::size().unwrap_or((80, 24));
@@ -119,21 +126,68 @@ pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<
     let mut query = String::new();
     let mut selected = 0usize;
 
+    // Pre-compute UTF-32 haystacks once (was rebuilt every keystroke).
+    let haystacks: Vec<Utf32String> = items.iter().map(|(_, text)| Utf32String::from(text.as_str())).collect();
+
+    // Last keystroke results — skip the whole pipeline if nothing changed.
+    let mut last_query: String = String::new();
+    let mut last_matches: Vec<usize> = (0..items.len()).collect();
+    let mut last_positions: Vec<Vec<u32>> = vec![Vec::new(); items.len()];
+
     let result = loop {
-        let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
-        let mut matches = items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, (_, text))| {
-                let haystack = Utf32String::from(text.as_str());
-                let mut positions = Vec::new();
-                let score = pattern.indices(haystack.slice(..), &mut matcher, &mut positions)?;
-                Some((index, score, positions))
-            })
-            .collect::<Vec<_>>();
-        if !query.is_empty() {
-            matches.sort_by_key(|item| Reverse(item.1));
+        if query != last_query {
+            last_query.clear();
+            last_query.push_str(&query);
+
+            // 1. FTS5 pre-filter — only scan when the query has 2+ chars and
+            //    no FTS-special chars (so plain substring still works for "gpt").
+            //    Returns an ordered list of candidate indices into `items`.
+            let fts_candidates: Option<Vec<usize>> = if query.len() >= 2 && !query.contains(':') {
+                fts_candidate_indices(conn, &items, &query)
+            } else {
+                None
+            };
+
+            // 2. Build a quick-lookup from id -> index for joining FTS hits.
+            let id_to_idx: std::collections::HashMap<&str, usize> = items
+                .iter()
+                .enumerate()
+                .map(|(i, (sel, _))| (sel.id.as_str(), i))
+                .collect();
+
+            let candidate_set: Vec<usize> = match fts_candidates {
+                Some(v) if !v.is_empty() => v,
+                // FTS had no hits (or wasn't queried) — fall back to fuzzy over all.
+                _ => (0..items.len()).collect(),
+            };
+
+            // 3. Fuzzy-rank candidates, returning (index, score, positions).
+            let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
+            let mut scored: Vec<(usize, u32, Vec<u32>)> = Vec::with_capacity(candidate_set.len());
+            if query.is_empty() {
+                // Empty query: preserve the original date-DESC order, no scoring.
+                scored = candidate_set.into_iter().map(|i| (i, 0, Vec::new())).collect();
+            } else {
+                for idx in candidate_set {
+                    let haystack = &haystacks[idx];
+                    let mut positions = Vec::new();
+                    if let Some(score) = pattern.indices(haystack.slice(..), &mut matcher, &mut positions) {
+                        scored.push((idx, score, positions));
+                    }
+                }
+                scored.sort_by_key(|item| Reverse(item.1));
+            }
+
+            last_matches = scored.iter().map(|(i, _, _)| *i).collect();
+            last_positions = vec![Vec::new(); items.len()];
+            for (i, _, p) in scored {
+                last_positions[i] = p;
+            }
+            // Suppress unused var warning if FTS brought no improvement.
+            let _ = id_to_idx;
         }
+        let matches = &last_matches;
+        let positions_map = &last_positions;
         selected = selected.min(matches.len().saturating_sub(1));
 
         // Move to start and clear our entire region
@@ -153,7 +207,7 @@ pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<
         let visible_start = selected.saturating_add(1).saturating_sub(max_rows);
         let visible_end = matches.len().min(visible_start + max_rows);
         let rendered_rows = visible_end - visible_start;
-        for (match_index, (item_index, _, positions)) in matches
+        for (match_index, &item_index) in matches
             .iter()
             .enumerate()
             .take(visible_end)
@@ -177,8 +231,8 @@ pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<
             )?;
             draw_text(
                 &mut stdout,
-                &items[*item_index].1,
-                positions,
+                &items[item_index].1,
+                &positions_map[item_index],
                 width.saturating_sub(4) as usize,
                 match_index == selected,
             )?;
@@ -207,7 +261,7 @@ pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<
             continue;
         }
         match key.code {
-            KeyCode::Enter if !matches.is_empty() => break Some(matches[selected].0),
+            KeyCode::Enter if !matches.is_empty() => break Some(matches[selected]),
             KeyCode::Esc | KeyCode::Char('c' | 'g')
                 if key.modifiers.contains(KeyModifiers::CONTROL) || key.code == KeyCode::Esc =>
             {
@@ -249,6 +303,59 @@ pub fn pick(items: Vec<(Selection, String)>, prompt: &str) -> io::Result<Option<
     Ok(result.map(|index| items.into_iter().nth(index).unwrap().0))
 }
 
+/// Run an FTS5 MATCH query against sessions_fts and return the matching
+/// session IDs in bm25 order (best first). Returns Ok(None) on any DB error
+/// so the caller can fall back to fuzzy.
+fn fts_candidate_ids(conn: &Connection, query: &str) -> rusqlite::Result<Option<Vec<String>>> {
+    // Escape FTS5 special chars; use prefix-match on each token for substring feel.
+    let cleaned: String = query
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { ' ' })
+        .collect();
+    let fts_query = cleaned
+        .split_whitespace()
+        .map(|tok| format!("\"{}\"*", tok.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if fts_query.is_empty() {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT s.id FROM sessions s
+         JOIN sessions_fts f ON f.rowid = s.rowid
+         WHERE sessions_fts MATCH ?1
+         ORDER BY bm25(sessions_fts), s.date DESC, s.time DESC
+         LIMIT 1000",
+    )?;
+    let rows = stmt.query_map([&fts_query], |row| row.get::<_, String>(0))?;
+    let ids: Vec<String> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(ids))
+}
+
+/// Map FTS5-matched session IDs back to indices in the `items` slice, in
+/// FTS-ranked order. Items not in the FTS hit set are dropped from the
+/// candidate pool so fuzzy only scores likely matches.
+fn fts_candidate_indices(
+    conn: &Connection,
+    items: &[(Selection, String)],
+    query: &str,
+) -> Option<Vec<usize>> {
+    let ids = fts_candidate_ids(conn, query).ok().flatten()?;
+    if ids.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut pos: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::with_capacity(items.len());
+    for (i, (sel, _)) in items.iter().enumerate() {
+        pos.insert(sel.id.as_str(), i);
+    }
+    let indices: Vec<usize> = ids
+        .iter()
+        .filter_map(|id| pos.get(id.as_str()).copied())
+        .collect();
+    Some(indices)
+}
+
 fn draw_text(
     stdout: &mut impl Write,
     text: &str,
@@ -258,34 +365,28 @@ fn draw_text(
 ) -> io::Result<()> {
     let positions: HashSet<u32> = positions.iter().copied().collect();
     let display = truncate(text, max_width);
+    // Build the entire line as one string with state-change escapes only.
+    // Was: ~display.chars().count() * 3 queue! calls per line.
+    let mut buf = String::with_capacity(display.len() * 2);
+    let mut last_matched = false;
+    let mut last_selected = false;
     for (index, ch) in display.chars().enumerate() {
         let matched = positions.contains(&(index as u32));
-        if matched {
-            queue!(
-                stdout,
-                SetForegroundColor(Color::AnsiValue(43)),
-                SetAttribute(crossterm::style::Attribute::Bold)
-            )?;
-        } else if selected {
-            queue!(
-                stdout,
-                SetForegroundColor(Color::White),
-                SetAttribute(crossterm::style::Attribute::Bold)
-            )?;
-        } else {
-            queue!(
-                stdout,
-                SetForegroundColor(Color::AnsiValue(250)),
-                SetAttribute(crossterm::style::Attribute::Reset)
-            )?;
+        if matched != last_matched || (matched == last_matched && selected != last_selected) {
+            if matched {
+                buf.push_str("\x1b[38;5;43;1m");
+            } else if selected {
+                buf.push_str("\x1b[37;1m");
+            } else {
+                buf.push_str("\x1b[38;5;250;0m");
+            }
+            last_matched = matched;
+            last_selected = selected;
         }
-        queue!(stdout, Print(ch))?;
+        buf.push(ch);
     }
-    queue!(
-        stdout,
-        ResetColor,
-        SetAttribute(crossterm::style::Attribute::Reset)
-    )?;
+    buf.push_str("\x1b[0m");
+    queue!(stdout, Print(buf))?;
     Ok(())
 }
 

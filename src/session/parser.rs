@@ -1,7 +1,9 @@
 use crate::session::types::{CallRow, SessionRow};
+use crate::models::types::UnifiedModel;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub fn sync_sessions(conn: &Connection) -> rusqlite::Result<()> {
@@ -32,6 +34,35 @@ pub fn sync_sessions(conn: &Connection) -> rusqlite::Result<()> {
         Ok(e) => e,
         Err(_) => return Ok(()),
     };
+
+    // Pre-fetch all models once for cost estimation
+    let mut db_models = Vec::new();
+    if let Ok(mut stmt_m) = conn.prepare("SELECT id, name, input_price, output_price FROM models") {
+        if let Ok(rows) = stmt_m.query_map([], |row| {
+            Ok(UnifiedModel {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                creator: "".to_string(),
+                release_date: "".to_string(),
+                context_window: None,
+                param_count: None,
+                input_price: row.get(2)?,
+                output_price: row.get(3)?,
+                speed_tok_s: None,
+                ttft_s: None,
+                open_weight: false,
+                source: "".to_string(),
+                raw_json: "".to_string(),
+            })
+        }) {
+            for r in rows.flatten() {
+                db_models.push(r);
+            }
+        }
+    }
+
+    // Buffer for project dirs and files we plan to process
+    let mut planned: Vec<(PathBuf, String, PathBuf, u64, String)> = Vec::new();
 
     for entry in entries.flatten() {
         if !entry.file_type().map_or(false, |ft| ft.is_dir()) {
@@ -65,12 +96,58 @@ pub fn sync_sessions(conn: &Connection) -> rusqlite::Result<()> {
                 }
             }
 
-            // Parse file and insert/update DB
-            if let Some((session_row, call_rows)) =
+            planned.push((project_dir.clone(), display_project.clone(), file_path, size, path_str));
+        }
+    }
+
+    if planned.is_empty() {
+        return Ok(());
+    }
+
+    // Wrap all writes in a single transaction — massive speedup for bulk inserts.
+    conn.execute_batch("BEGIN")?;
+
+    let result = (|| -> rusqlite::Result<()> {
+        // Fuzzy match cache persists across all calls in this sync run.
+        let mut cost_cache: std::collections::HashMap<String, Option<usize>> = std::collections::HashMap::new();
+
+        let mut pb = crate::ui::progress::Progress::new("Syncing sessions", planned.len() as u64);
+        for (i, (_, display_project, file_path, size, _path_str)) in planned.into_iter().enumerate() {
+            if let Some((mut session_row, mut call_rows)) =
                 parse_session_file(&file_path, &display_project, size)
             {
+                if session_row.total_cost == 0.0 && session_row.total_tokens > 0 && !db_models.is_empty() {
+                    let mut session_cost = 0.0;
+                    for call in &mut call_rows {
+                        if call.cost == 0.0 && call.tokens > 0 {
+                            if let Some(est) = crate::models::fuzzy::estimate_cost_cached(
+                                &call.model, call.input_tokens, call.output_tokens,
+                                &db_models, &mut cost_cache,
+                            ) {
+                                call.cost = est;
+                            }
+                        }
+                        session_cost += call.cost;
+                    }
+                    session_row.total_cost = session_cost;
+                }
+
+                // last_model = the model from the chronologically last call
+                session_row.last_model = call_rows.last().map(|c| c.model.clone()).unwrap_or_default();
+
                 insert_session(conn, &session_row, &call_rows)?;
             }
+            pb.tick((i as u64) + 1);
+        }
+        pb.finish();
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => { conn.execute_batch("COMMIT")?; }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e);
         }
     }
 
@@ -78,7 +155,6 @@ pub fn sync_sessions(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 fn decode_project_name(encoded: &str) -> String {
-    // Basic decode from "--C--Users-..."
     let mut decoded = encoded.replace("--", "/").replace("-", "/");
     if decoded.starts_with('/') {
         decoded.remove(0);
@@ -86,7 +162,6 @@ fn decode_project_name(encoded: &str) -> String {
     if decoded.ends_with('/') {
         decoded.pop();
     }
-    // Return last component as short name
     Path::new(&decoded)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -98,7 +173,8 @@ fn parse_session_file(
     project: &str,
     file_size: u64,
 ) -> Option<(SessionRow, Vec<CallRow>)> {
-    let content = fs::read_to_string(path).ok()?;
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
 
     let mut id = String::new();
     let mut timestamp = String::new();
@@ -110,9 +186,14 @@ fn parse_session_file(
     let mut errors = 0;
 
     let mut calls = Vec::new();
+    let mut unique_models = std::collections::HashSet::new();
 
-    for line in content.lines() {
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
             let t = value["type"].as_str().unwrap_or("");
             if t == "session" {
                 id = value["id"].as_str().unwrap_or("").to_string();
@@ -136,13 +217,11 @@ fn parse_session_file(
                     }
                 }
 
-                // If usage is present either at root or inside message, log the call
                 let mut usage_obj = value.get("usage").and_then(|u| u.as_object());
                 let mut model_str = value.get("model").and_then(|m| m.as_str());
                 let mut error_val = value.get("stopReason").and_then(|s| s.as_str());
 
                 if usage_obj.is_none() {
-                    // Try looking inside message (older format)
                     if let Some(msg_obj) = value.get("message") {
                         usage_obj = msg_obj.get("usage").and_then(|u| u.as_object());
                         if model_str.is_none() {
@@ -174,6 +253,8 @@ fn parse_session_file(
                         errors += 1;
                     }
 
+                    unique_models.insert(model.clone());
+
                     calls.push(CallRow {
                         session_id: id.clone(),
                         model,
@@ -184,8 +265,6 @@ fn parse_session_file(
                         is_error,
                     });
                 }
-            } else if t == "model_change" {
-                // Ignore for now
             }
         }
     }
@@ -194,7 +273,6 @@ fn parse_session_file(
         return None;
     }
 
-    // "2026-07-25T05:10:12.669Z"
     let date = timestamp.split('T').next().unwrap_or("").to_string();
     let time = timestamp
         .split('T')
@@ -211,10 +289,12 @@ fn parse_session_file(
         date,
         time,
         prompt,
+        models: unique_models.into_iter().collect::<Vec<_>>().join(" "),
         total_calls,
         total_tokens,
         total_cost,
         errors,
+        last_model: String::new(), // Populated by caller after cost estimation
     };
 
     Some((session, calls))
@@ -226,8 +306,8 @@ fn insert_session(
     calls: &[CallRow],
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, total_calls, total_tokens, total_cost, errors)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, models, total_calls, total_tokens, total_cost, errors, last_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         (
             &session.id,
             &session.project,
@@ -236,10 +316,12 @@ fn insert_session(
             &session.date,
             &session.time,
             &session.prompt,
+            &session.models,
             session.total_calls,
             session.total_tokens,
             session.total_cost,
             session.errors,
+            &session.last_model,
         ),
     )?;
 

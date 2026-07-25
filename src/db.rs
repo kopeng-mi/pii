@@ -6,8 +6,16 @@ pub fn get_db_path() -> PathBuf {
 }
 
 pub fn init_db(conn: &Connection) -> Result<()> {
+    // Performance PRAGMAs — WAL + tuned cache + mmap
     conn.execute_batch(
         "
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA cache_size = -16000;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA mmap_size = 268435456;
+        PRAGMA busy_timeout = 5000;
+
         CREATE TABLE IF NOT EXISTS sessions (
             id          TEXT PRIMARY KEY,
             project     TEXT NOT NULL,
@@ -16,10 +24,12 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             date        TEXT NOT NULL,
             time        TEXT NOT NULL,
             prompt      TEXT DEFAULT '',
+            models      TEXT DEFAULT '',
             total_calls INTEGER DEFAULT 0,
             total_tokens INTEGER DEFAULT 0,
             total_cost  REAL DEFAULT 0.0,
-            errors      INTEGER DEFAULT 0
+            errors      INTEGER DEFAULT 0,
+            last_model  TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS calls (
@@ -34,7 +44,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         );
 
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-            project, prompt, models,
+            project, prompt, models, last_model,
             content=sessions, content_rowid=rowid
         );
 
@@ -91,20 +101,80 @@ pub fn init_db(conn: &Connection) -> Result<()> {
 
         -- Create triggers to keep FTS table in sync
         CREATE TRIGGER IF NOT EXISTS sessions_ai AFTER INSERT ON sessions BEGIN
-            INSERT INTO sessions_fts(rowid, project, prompt, models)
-            VALUES (new.rowid, new.project, new.prompt, '');
+            INSERT INTO sessions_fts(rowid, project, prompt, models, last_model)
+            VALUES (new.rowid, new.project, new.prompt, new.models, new.last_model);
         END;
         CREATE TRIGGER IF NOT EXISTS sessions_ad AFTER DELETE ON sessions BEGIN
-            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models)
-            VALUES('delete', old.rowid, old.project, old.prompt, '');
+            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models, last_model)
+            VALUES('delete', old.rowid, old.project, old.prompt, old.models, old.last_model);
         END;
         CREATE TRIGGER IF NOT EXISTS sessions_au AFTER UPDATE ON sessions BEGIN
-            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models)
-            VALUES('delete', old.rowid, old.project, old.prompt, '');
-            INSERT INTO sessions_fts(rowid, project, prompt, models)
-            VALUES (new.rowid, new.project, new.prompt, '');
+            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models, last_model)
+            VALUES('delete', old.rowid, old.project, old.prompt, old.models, old.last_model);
+            INSERT INTO sessions_fts(rowid, project, prompt, models, last_model)
+            VALUES (new.rowid, new.project, new.prompt, new.models, new.last_model);
         END;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date);
+        CREATE INDEX IF NOT EXISTS idx_calls_session ON calls(session_id);
+        CREATE INDEX IF NOT EXISTS idx_scores_model ON scores(model_id);
         ",
     )?;
+    migrate_sessions_fts(conn)?;
+    Ok(())
+}
+
+/// Migrate sessions_fts from older schema (project,prompt,models) to current
+/// (project,prompt,models,last_model). FTS5 content tables can't ALTER columns,
+/// so we rebuild from the source table when the column count is wrong.
+fn migrate_sessions_fts(conn: &Connection) -> Result<()> {
+    let n_cols: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sessions_fts')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if n_cols >= 4 {
+        return Ok(());
+    }
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+        .unwrap_or(0);
+    let mut pb = crate::ui::progress::Progress::new(
+        "Migrating FTS index (adding last_model)",
+        (total as u64).max(1),
+    );
+    eprintln!("  [migrate] upgrading sessions_fts schema (adding last_model)");
+    conn.execute_batch(
+        "
+        DROP TRIGGER IF EXISTS sessions_ai;
+        DROP TRIGGER IF EXISTS sessions_ad;
+        DROP TRIGGER IF EXISTS sessions_au;
+        DROP TABLE IF EXISTS sessions_fts;
+        CREATE VIRTUAL TABLE sessions_fts USING fts5(
+            project, prompt, models, last_model,
+            content=sessions, content_rowid=rowid
+        );
+        CREATE TRIGGER sessions_ai AFTER INSERT ON sessions BEGIN
+            INSERT INTO sessions_fts(rowid, project, prompt, models, last_model)
+            VALUES (new.rowid, new.project, new.prompt, new.models, new.last_model);
+        END;
+        CREATE TRIGGER sessions_ad AFTER DELETE ON sessions BEGIN
+            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models, last_model)
+            VALUES('delete', old.rowid, old.project, old.prompt, old.models, old.last_model);
+        END;
+        CREATE TRIGGER sessions_au AFTER UPDATE ON sessions BEGIN
+            INSERT INTO sessions_fts(sessions_fts, rowid, project, prompt, models, last_model)
+            VALUES('delete', old.rowid, old.project, old.prompt, old.models, old.last_model);
+            INSERT INTO sessions_fts(rowid, project, prompt, models, last_model)
+            VALUES (new.rowid, new.project, new.prompt, new.models, new.last_model);
+        END;
+        INSERT INTO sessions_fts(rowid, project, prompt, models, last_model)
+            SELECT rowid, project, prompt, models, last_model FROM sessions;
+        ",
+    )?;
+    pb.tick((total as u64).max(1));
+    pb.finish();
     Ok(())
 }

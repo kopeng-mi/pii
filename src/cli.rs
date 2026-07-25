@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "pii",
     version,
-    about = "pi coding agent session analytics & model explorer"
+    about = "\x1b[38;5;43mpii\x1b[0m — pi coding agent session analytics & model explorer",
+    disable_help_flag = true,
 )]
 pub struct Cli {
     /// Show today's sessions
@@ -51,6 +52,10 @@ pub struct Cli {
     #[arg(short = 'd', long, value_name = "DAYS")]
     pub days: Option<u32>,
 
+    /// Print custom styled help
+    #[arg(short = 'h', long, action = clap::ArgAction::Help)]
+    pub help: Option<bool>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -65,17 +70,17 @@ pub enum Commands {
         #[arg(long)]
         refresh: bool,
     },
-    /// Compare models side-by-side
+    /// Compare models side-by-side (interactive if no args)
     Compare {
         /// Models to compare
         models: Vec<String>,
-        /// Show radar chart
+        /// Show radar/spider chart after table
         #[arg(long)]
         spider: bool,
     },
-    /// Show TrueSkill rankings from LLM-Stats
+    /// Show model rankings by benchmark score
     Rankings {
-        /// Ranking category
+        /// Ranking category: coding | math | general
         category: Option<String>,
     },
 }
