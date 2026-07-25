@@ -26,7 +26,13 @@ pii model        # model detail card or picker
 pii compare      # side-by-side model comparison (add --spider for radar)
 pii rankings     # leaderboard by coding / math / general
 pii -h           # help
+
+# Refreshes
+pii -r           # wipe session cache and reparse all JSONL files
+pii -R           # force-refresh model data from APIs (LLM-Stats, Artificial Analysis)
 ```
+
+By default `pii` only parses new or changed session files. `-r` forces a full resync.
 
 API keys for live model data go in `~/.pi/.env` (or process env):
 

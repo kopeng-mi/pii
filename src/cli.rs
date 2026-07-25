@@ -52,6 +52,14 @@ pub struct Cli {
     #[arg(short = 'd', long, value_name = "DAYS")]
     pub days: Option<u32>,
 
+    /// Force refresh of model data from APIs
+    #[arg(short = 'R', long)]
+    pub refresh_api: bool,
+
+    /// Force resync of session JSONL files
+    #[arg(short = 'r', long)]
+    pub refresh_sessions: bool,
+
     /// Print custom styled help
     #[arg(short = 'h', long, action = clap::ArgAction::Help)]
     pub help: Option<bool>,

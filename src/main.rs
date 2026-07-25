@@ -227,8 +227,20 @@ fn main() -> rusqlite::Result<()> {
     let conn = Connection::open(&db_path)?;
     db::init_db(&conn)?;
 
+    // Force-resync: drop cached session rows, then re-parse every file.
+    // The DELETE triggers on sessions/calls also wipe sessions_fts, so the
+    // incremental sync that follows rebuilds everything from scratch.
+    if cli.refresh_sessions {
+        conn.execute("DELETE FROM calls", [])?;
+        conn.execute("DELETE FROM sessions", [])?;
+    }
+
     // Parse newly added sessions
     session::parser::sync_sessions(&conn)?;
+
+    // -R forces a refresh of model data; otherwise it's a no-op when already
+    // fetched today.
+    models::api::refresh_if_needed(&conn, cli.refresh_api)?;
 
     let today = Local::now();
 
