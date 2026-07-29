@@ -178,19 +178,19 @@ pub fn print_heatmap(conn: &Connection) -> rusqlite::Result<()> {
     // ── Stats ──
     println!();
     println!(
-        "  \x1b[38;5;43m◈\x1b[0m Sessions    \x1b[1m{}\x1b[0m",
+        "    Sessions    \x1b[1m{}\x1b[0m",
         total_sessions
     );
     println!(
-        "  \x1b[38;5;114m◆\x1b[0m Tokens      \x1b[1m{}\x1b[0m",
+        "    Tokens      \x1b[1m{}\x1b[0m",
         crate::ui::table::compact_num(total_tokens)
     );
     println!(
-        "  \x1b[38;5;220m$\x1b[0m Cost        \x1b[1m\x1b[38;5;220m${:.2}\x1b[0m",
+        "    Cost        \x1b[1m\x1b[38;5;220m${:.2}\x1b[0m",
         total_cost
     );
     println!(
-        "  \x1b[38;5;246m▸\x1b[0m Active Days  \x1b[1m{}\x1b[0m \x1b[38;5;242m/ {} total\x1b[0m",
+        "    Active Days  \x1b[1m{}\x1b[0m \x1b[38;5;242m/ {} total\x1b[0m",
         active_days, DAYS_TO_SHOW
     );
 
