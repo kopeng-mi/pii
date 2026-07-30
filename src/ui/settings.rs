@@ -58,6 +58,16 @@ const DEFS: &[SettingDef] = &[
         label: "UI theme",
         options: &["dark", "light"],
     },
+    SettingDef {
+        key: "api.llm_stats_key",
+        label: "LLM-Stats API key",
+        options: &[],
+    },
+    SettingDef {
+        key: "api.artificial_analysis_key",
+        label: "Artificial Analysis key",
+        options: &[],
+    },
 ];
 
 /// Render the settings picker. Changes are written to the DB only on confirm

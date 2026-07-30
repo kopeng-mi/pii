@@ -234,6 +234,22 @@ fn main() -> rusqlite::Result<()> {
     let conn = Connection::open(&db_path)?;
     db::init_db(&conn)?;
 
+    // Load API keys from DB settings as fallback for env vars
+    let fallback_keys = [
+        ("LLM_STATS_API_KEY", "api.llm_stats_key"),
+        ("ARTIFICIALANALYSIS_API_KEY", "api.artificial_analysis_key"),
+    ];
+    for (env_name, setting_key) in &fallback_keys {
+        if std::env::var(env_name).is_ok() {
+            continue;
+        }
+        let val = db::get_setting(&conn, setting_key, "")?;
+        if !val.is_empty() {
+            // SAFETY: single-threaded at this point, setting env vars is fine
+            unsafe { std::env::set_var(env_name, &val); }
+        }
+    }
+
     // Force-resync: drop cached session rows, then re-parse every file.
     // The DELETE triggers on sessions/calls also wipe sessions_fts, so the
     // incremental sync that follows rebuilds everything from scratch.
