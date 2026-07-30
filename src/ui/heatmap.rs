@@ -85,8 +85,8 @@ pub fn print_heatmap(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     println!(
-        "\n  \x1b[38;5;43m━━\x1b[0m \x1b[1mActivity Heatmap\x1b[0m · Last {} Days\n",
-        DAYS_TO_SHOW
+        "\n  {}\x1b[0m \x1b[1mActivity Heatmap\x1b[0m · Last {} Days\n",
+        c4, DAYS_TO_SHOW
     );
 
     // Align start to Sunday
@@ -208,13 +208,13 @@ pub fn print_heatmap(conn: &Connection) -> rusqlite::Result<()> {
         active_days, DAYS_TO_SHOW
     );
 
-    // Legend
+    // Legend (uses the chosen palette so it previews the actual gradient).
     print!("\n  \x1b[38;5;242mLess\x1b[0m ");
     print!("\x1b[38;5;236m■\x1b[0m ");
-    print!("\x1b[38;5;30m■\x1b[0m ");
-    print!("\x1b[38;5;37m■\x1b[0m ");
-    print!("\x1b[38;5;43m■\x1b[0m ");
-    print!("\x1b[38;5;51m■\x1b[0m ");
+    print!("{}■\x1b[0m ", c1);
+    print!("{}■\x1b[0m ", c2);
+    print!("{}■\x1b[0m ", c3);
+    print!("{}■\x1b[0m ", c4);
     println!("\x1b[38;5;242mMore\x1b[0m\n");
 
     Ok(())
