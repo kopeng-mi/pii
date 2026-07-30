@@ -10,16 +10,28 @@ pub fn format_model_item(m: &UnifiedModel) -> (Selection, String) {
     } else {
         "--/--".to_string()
     };
-    let date_str = if m.release_date.is_empty() { " --    ".to_string() } else { m.release_date.clone() };
+    let date_str = if m.release_date.is_empty() { "    --    ".to_string() } else { m.release_date.clone() };
     
+    let source_tag = |src: &str| -> String {
+        let pad = 12usize.saturating_sub(src.len());
+        let colored = match src {
+            "llm-stats" => format!("\x1b[38;5;114m{}\x1b[0m", src),
+            "aa"        => format!("\x1b[38;5;220m{}\x1b[0m", src),
+            "merged"    => format!("\x1b[38;5;43m{}\x1b[0m", src),
+            _           => src.to_string(),
+        };
+        colored + &" ".repeat(pad)
+    };
+
     let display = format!(
-        "{}  {:<25}  {:<14}  {:<10}  {:>6}  {:>7}",
+        "{:<10}  {:<25}  {:<15}  {:<15}  {:>6}  {:>7}  {}",
         date_str,
         crate::ui::table::truncate(&m.name, 25),
-        crate::ui::table::truncate(&m.creator, 14),
+        crate::ui::table::truncate(&m.creator, 15),
         price_str,
         context,
-        speed
+        speed,
+        source_tag(&m.source)
     );
 
     (
