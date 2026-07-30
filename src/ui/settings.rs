@@ -39,6 +39,11 @@ impl Drop for TerminalGuard {
 /// All known settings, in display order. Add new ones here.
 const DEFS: &[SettingDef] = &[
     SettingDef {
+        key: "picker.view",
+        label: "Picker view (-i, -c)",
+        options: &["tree", "list"],
+    },
+    SettingDef {
         key: "picker.default_sort",
         label: "Default sort (picker)",
         options: &["time", "cost", "tokens", "calls"],

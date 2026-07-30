@@ -178,6 +178,7 @@ fn parse_session_file(
 
     let mut id = String::new();
     let mut timestamp = String::new();
+    let mut parent_session = String::new();
     let mut prompt = String::new();
 
     let mut total_calls = 0;
@@ -229,6 +230,7 @@ fn parse_session_file(
             } else if t == "session" {
                 id = value["id"].as_str().unwrap_or("").to_string();
                 timestamp = value["timestamp"].as_str().unwrap_or("").to_string();
+                parent_session = value["parentSession"].as_str().unwrap_or("").to_string();
             } else if t == "message" {
                 if let Some(role) = value
                     .get("message")
@@ -327,6 +329,7 @@ fn parse_session_file(
         errors,
         last_model: String::new(), // Populated by caller after cost estimation
         ai_name: if !ai_name.is_empty() { ai_name } else { info_name },
+        parent_session,
     };
 
     Some((session, calls))
@@ -338,8 +341,8 @@ fn insert_session(
     calls: &[CallRow],
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, models, total_calls, total_tokens, total_cost, errors, last_model, ai_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, models, total_calls, total_tokens, total_cost, errors, last_model, ai_name, parent_session)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         (
             &session.id,
             &session.project,
@@ -355,6 +358,7 @@ fn insert_session(
             session.errors,
             &session.last_model,
             &session.ai_name,
+            &session.parent_session,
         ),
     )?;
 

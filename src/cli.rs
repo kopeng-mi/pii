@@ -93,4 +93,6 @@ pub enum Commands {
     },
     /// Interactive settings picker
     Settings,
+    /// Dump the session tree (debug)
+    Tree,
 }

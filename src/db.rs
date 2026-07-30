@@ -64,7 +64,8 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             total_cost  REAL DEFAULT 0.0,
             errors      INTEGER DEFAULT 0,
             last_model  TEXT DEFAULT '',
-            ai_name     TEXT DEFAULT ''
+            ai_name     TEXT DEFAULT '',
+            parent_session TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS calls (
@@ -162,6 +163,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
     )?;
     migrate_sessions_fts(conn)?;
     migrate_sessions_ai_name(conn)?;
+    migrate_sessions_parent(conn)?;
     Ok(())
 }
 
@@ -232,6 +234,22 @@ fn migrate_sessions_ai_name(conn: &Connection) -> Result<()> {
     if !has_col {
         eprintln!("  [migrate] adding sessions.ai_name column");
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN ai_name TEXT DEFAULT ''")?;
+    }
+    Ok(())
+}
+
+/// Add `parent_session` column to existing `sessions` table if upgrading.
+fn migrate_sessions_parent(conn: &Connection) -> Result<()> {
+    let has_col: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'parent_session')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has_col {
+        eprintln!("  [migrate] adding sessions.parent_session column");
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN parent_session TEXT DEFAULT ''")?;
     }
     Ok(())
 }

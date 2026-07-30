@@ -420,17 +420,24 @@ fn main() -> rusqlite::Result<()> {
                 }
                 return Ok(());
             }
+            cli::Commands::Tree => {
+                ui::tree_picker::dump_tree(&conn)?;
+                return Ok(());
+            }
         }
     }
 
     // Default behavior or explicit continue/inspect
     let is_inspect = cli.inspect || cli.calls;
+    let view = db::get_setting(&conn, "picker.view", "tree")?;
+    let prompt_label = if is_inspect { "inspect" } else { "continue" };
+    let selection = if view == "tree" {
+        ui::tree_picker::run_tree_picker(&conn, cli.days, prompt_label)?
+    } else {
+        ui::picker::run_picker(&conn, cli.days, prompt_label)?
+    };
 
-    if let Some(selection) = ui::picker::run_picker(
-        &conn,
-        cli.days,
-        if is_inspect { "inspect" } else { "continue" },
-    )? {
+    if let Some(selection) = selection {
         if is_inspect {
             // In Phase 3, -i explicitly implies we show calls if they exist.
             inspect_session(&conn, &selection.id, true)?;
