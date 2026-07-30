@@ -269,7 +269,22 @@ fn run_inner(nodes: Vec<Node>, _prompt: &str) -> io::Result<Option<Selection>> {
     let mut selected: usize = 0;
 
     loop {
-        let visible = build_visible(&tree, &expanded);
+        let mut visible = build_visible(&tree, &expanded);
+
+        // Accordion-on-nav: if the current selection is a collapsed folder,
+        // auto-expand it and close all other folders.
+        if let Some(row) = visible.get(selected) {
+            if row.is_folder && !expanded.contains(&row.id) {
+                let id = row.id.clone();
+                for fid in &tree.roots {
+                    if fid != &id {
+                        expanded.remove(fid);
+                    }
+                }
+                expanded.insert(id);
+                visible = build_visible(&tree, &expanded);
+            }
+        }
         if selected >= visible.len() {
             selected = visible.len().saturating_sub(1);
         }
