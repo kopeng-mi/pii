@@ -215,18 +215,17 @@ pub fn refresh_if_needed(conn: &rusqlite::Connection, force: bool) -> rusqlite::
     let last_fetched: Option<String> = stmt.query_row([], |row| row.get(0)).optional()?;
 
     if force || last_fetched.is_none() || last_fetched.unwrap() != today {
-        // Two parallel network calls + DB writes. Show three lines of progress
-        // so the user knows nothing is hung.
-        let llm_pb = crate::ui::progress::Progress::spinner("Fetching LLM-Stats");
-        let aa_pb = crate::ui::progress::Progress::spinner("Fetching Artificial Analysis");
-        if let Ok((models, evals)) = fetch_models() {
-            llm_pb.finish();
-            aa_pb.finish();
-            let save_pb = crate::ui::progress::Progress::new("Saving models", (models.len() + evals.len()) as u64);
-            save_models_with_progress(conn, &models, &evals, save_pb)?;
-        } else {
-            llm_pb.fail("network error");
-            aa_pb.fail("network error");
+        let pb = crate::ui::progress::Progress::spinner("Fetching models");
+        match fetch_models() {
+            Ok((models, evals)) => {
+                pb.finish();
+                let total = (models.len() + evals.len()) as u64;
+                let save_pb = crate::ui::progress::Progress::new("Saving models", total.max(1));
+                save_models_with_progress(conn, &models, &evals, save_pb)?;
+            }
+            Err(_) => {
+                pb.fail("network error");
+            }
         }
     }
     Ok(())
