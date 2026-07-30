@@ -147,6 +147,40 @@ pub fn print_sessions(
     println!(
         "  \x1b[38;5;237m───────────────────────────────────── end ─────────────────────────────────────\x1b[0m"
     );
+
+    // ── Provider breakdown (time-scoped) ──
+    if let Some(date_filter) = exact_date.or(min_date) {
+        let op = if exact_date.is_some() { "=" } else { ">=" };
+        let psql = format!(
+            "SELECT c.provider, COUNT(*) AS calls, SUM(c.tokens) AS tokens, SUM(c.cost) AS cost
+             FROM calls c JOIN sessions s ON s.id = c.session_id
+             WHERE s.date {} ?1 AND c.provider != ''
+             GROUP BY c.provider ORDER BY calls DESC", op);
+        let mut pstmt = conn.prepare(&psql)?;
+        let mut provs = Vec::new();
+        let mut rows = pstmt.query([date_filter])?;
+        while let Some(row) = rows.next()? {
+            let p: String = row.get(0)?;
+            let c: u32 = row.get(1)?;
+            let t: u32 = row.get(2)?;
+            let cost: f64 = row.get(3)?;
+            provs.push((p, c, t, cost));
+        }
+        if !provs.is_empty() {
+            let max_c = provs.first().map(|x| x.1).unwrap_or(1);
+            println!();
+            println!("  \x1b[38;5;51mProviders\x1b[0m");
+            for (p, calls, tokens, cost) in &provs {
+                let bar = make_bar(*calls as f64, max_c as f64, 6);
+                let cost_fmt = if *cost == 0.0 { "     --".to_string() } else { format!("${:>6.2}", cost) };
+                println!(
+                    "    \x1b[38;5;43m{:<16}\x1b[0m  {} {:>4} calls  {:>7}  \x1b[38;5;220m{}\x1b[0m",
+                    truncate(p, 16), bar, calls, compact_num(*tokens as u64), cost_fmt
+                );
+            }
+        }
+    }
+
     println!();
     Ok(())
 }

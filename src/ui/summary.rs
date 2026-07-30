@@ -143,5 +143,42 @@ pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
     }
     println!();
 
+    // ── Provider Breakdown ──
+    let prov_sql = "
+        SELECT c.provider, COUNT(*) AS call_count, SUM(c.tokens) AS token_count, SUM(c.cost) AS total_cost
+        FROM calls c
+        WHERE c.provider != ''
+        GROUP BY c.provider
+        ORDER BY call_count DESC
+    ";
+    let mut stmt_p = conn.prepare(prov_sql)?;
+    let mut prov_iter = stmt_p.query([])?;
+
+    let mut providers = Vec::new();
+    while let Some(row) = prov_iter.next()? {
+        let p: String = row.get(0)?;
+        let c: u32 = row.get(1)?;
+        let t: u32 = row.get(2)?;
+        let cost: f64 = row.get(3)?;
+        providers.push((p, c, t, cost));
+    }
+
+    if !providers.is_empty() {
+        let max_prov_calls = providers.first().map(|p| p.1).unwrap_or(1);
+        let h = "Provider Breakdown";
+        println!("  \x1b[38;5;51m{}\x1b[0m", h);
+        println!("  \x1b[38;5;237m{}\x1b[0m", "─".repeat(h.chars().count()));
+        for (p, calls, tokens, cost) in providers.iter() {
+            let bar = make_bar(*calls as f64, max_prov_calls as f64, 8);
+            let cost_fmt = format!("${:>6.2}", cost);
+            let tokens_str = compact_num(*tokens as u64);
+            println!(
+                "    \x1b[38;5;43m{:<20}\x1b[0m  {} {:>5} calls  {:>6} tk  \x1b[38;5;220m{}\x1b[0m",
+                crate::ui::table::truncate(p, 20), bar, calls, tokens_str, cost_fmt
+            );
+        }
+        println!();
+    }
+
     Ok(())
 }

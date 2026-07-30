@@ -187,6 +187,7 @@ fn parse_session_file(
     let mut errors = 0;
 
     let mut calls = Vec::new();
+    let mut cur_provider = String::new();
     let mut unique_models = std::collections::HashSet::new();
 
     // Name resolution: prefer latest AI-autoname, then latest session_info, then prompt.
@@ -231,6 +232,10 @@ fn parse_session_file(
                 id = value["id"].as_str().unwrap_or("").to_string();
                 timestamp = value["timestamp"].as_str().unwrap_or("").to_string();
                 parent_session = value["parentSession"].as_str().unwrap_or("").to_string();
+            } else if t == "model_change" {
+                if let Some(p) = value.get("provider").and_then(|v| v.as_str()) {
+                    cur_provider = p.to_string();
+                }
             } else if t == "message" {
                 if let Some(role) = value
                     .get("message")
@@ -290,6 +295,7 @@ fn parse_session_file(
 
                     calls.push(CallRow {
                         session_id: id.clone(),
+                        provider: cur_provider.clone(),
                         model,
                         input_tokens: input,
                         output_tokens: output,
@@ -365,13 +371,14 @@ fn insert_session(
     conn.execute("DELETE FROM calls WHERE session_id = ?1", [&session.id])?;
 
     let mut stmt = conn.prepare(
-        "INSERT INTO calls (session_id, model, input_tokens, output_tokens, tokens, cost, is_error)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO calls (session_id, provider, model, input_tokens, output_tokens, tokens, cost, is_error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?;
 
     for call in calls {
         stmt.execute((
             &call.session_id,
+            &call.provider,
             &call.model,
             call.input_tokens,
             call.output_tokens,

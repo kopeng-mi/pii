@@ -21,6 +21,7 @@ pub struct SessionRow {
 
 pub struct CallRow {
     pub session_id: String,
+    pub provider: String,
     pub model: String,
     pub input_tokens: u32,
     pub output_tokens: u32,

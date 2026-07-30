@@ -99,21 +99,22 @@ fn inspect_session(
             let mut cstmt = conn.prepare(call_sql)?;
             call_rows = cstmt.query_map([session_id], |crow| {
                 Ok((
-                    crow.get::<_, String>(1)?, // model
-                    crow.get::<_, u32>(2)?,    // in
-                    crow.get::<_, u32>(3)?,    // out
-                    crow.get::<_, f64>(4)?,    // cost
-                    crow.get::<_, bool>(5)?,   // err
+                    crow.get::<_, String>(1)?, // provider
+                    crow.get::<_, String>(2)?, // model
+                    crow.get::<_, u32>(3)?,    // in
+                    crow.get::<_, u32>(4)?,    // out
+                    crow.get::<_, f64>(5)?,    // cost
+                    crow.get::<_, bool>(6)?,   // err
                 ))
             })?.collect::<Result<Vec<_>, _>>()?;
 
             if !call_rows.is_empty() {
-                max_call_tokens = call_rows.iter().map(|&(_, i, o, _, _)| i + o).max().unwrap_or(1) as f64;
-                total_in = call_rows.iter().map(|&(_, i, _, _, _)| i).sum();
-                total_out = call_rows.iter().map(|&(_, _, o, _, _)| o).sum();
+                max_call_tokens = call_rows.iter().map(|&(_, _, i, o, _, _)| i + o).max().unwrap_or(1) as f64;
+                total_in = call_rows.iter().map(|&(_, _, i, _, _, _)| i).sum();
+                total_out = call_rows.iter().map(|&(_, _, _, o, _, _)| o).sum();
                 // Override tokens and cost with precise sum from calls
                 tokens = (total_in + total_out) as u64;
-                cost = call_rows.iter().map(|&(_, _, _, c, _)| c).sum();
+                cost = call_rows.iter().map(|&(_, _, _, _, c, _)| c).sum();
             }
         }
 
@@ -151,19 +152,20 @@ fn inspect_session(
             println!(
                 "  \x1b[38;5;237m────────────────────────────────────────────────────────────────────────────────────\x1b[0m"
             );
-            for (idx, (m, it, ot, c, is_err)) in call_rows.into_iter().enumerate() {
+            for (idx, (prov, m, it, ot, c, is_err)) in call_rows.into_iter().enumerate() {
                 let err_str = if is_err {
                     "\x1b[38;5;196mERR\x1b[0m"
                 } else {
                     "   "
                 };
                 let model_fmt = crate::ui::table::truncate(&m, 20);
+                let prov_fmt = crate::ui::table::truncate(&prov, 14);
                 let bar = crate::ui::table::make_bar((it + ot) as f64, max_call_tokens, 12);
                 let total_t = crate::ui::table::compact_num((it + ot) as u64);
 
                 println!(
-                    "  \x1b[38;5;242m{:>2}\x1b[0m │ \x1b[38;5;114m{:<20}\x1b[0m  {} {:>5}  \x1b[38;5;242min:\x1b[0m {:<5} \x1b[38;5;242mout:\x1b[0m {:<5} \x1b[38;5;220m${:>6.4}\x1b[0m  {}",
-                    idx + 1, model_fmt, bar, total_t, crate::ui::table::compact_num(it as u64), crate::ui::table::compact_num(ot as u64), c, err_str
+                    "  \x1b[38;5;242m{:>2}\x1b[0m \x1b[38;5;43m{:<14}\x1b[0m \x1b[38;5;114m{:<20}\x1b[0m  {} {:>5}  \x1b[38;5;242min:\x1b[0m {:<5} \x1b[38;5;242mout:\x1b[0m {:<5} \x1b[38;5;220m${:>6.4}\x1b[0m  {}",
+                    idx + 1, prov_fmt, model_fmt, bar, total_t, crate::ui::table::compact_num(it as u64), crate::ui::table::compact_num(ot as u64), c, err_str
                 );
             }
             println!();

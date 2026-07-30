@@ -71,6 +71,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS calls (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id    TEXT NOT NULL REFERENCES sessions(id),
+            provider      TEXT NOT NULL DEFAULT '',
             model         TEXT NOT NULL,
             input_tokens  INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
@@ -164,6 +165,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
     migrate_sessions_fts(conn)?;
     migrate_sessions_ai_name(conn)?;
     migrate_sessions_parent(conn)?;
+    migrate_calls_provider(conn)?;
     Ok(())
 }
 
@@ -234,6 +236,24 @@ fn migrate_sessions_ai_name(conn: &Connection) -> Result<()> {
     if !has_col {
         eprintln!("  [migrate] adding sessions.ai_name column");
         conn.execute_batch("ALTER TABLE sessions ADD COLUMN ai_name TEXT DEFAULT ''")?;
+    }
+    Ok(())
+}
+
+/// Add `provider` column to existing `calls` table if upgrading.
+fn migrate_calls_provider(conn: &Connection) -> Result<()> {
+    let has: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('calls') WHERE name = 'provider')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has {
+        eprintln!("  [migrate] adding calls.provider column");
+        conn.execute_batch(
+            "ALTER TABLE calls ADD COLUMN provider TEXT NOT NULL DEFAULT ''",
+        )?;
     }
     Ok(())
 }
