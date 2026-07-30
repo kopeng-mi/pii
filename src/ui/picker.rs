@@ -49,13 +49,22 @@ pub fn run_picker(
     // Pull a wider candidate set; the picker will refine via FTS + fuzzy at
     // keystroke time. Cap rows so we don't materialize tens of thousands on
     // startup. Increase this once `--all` lands.
-    let mut stmt = conn.prepare(
+    let sort = crate::db::get_setting(conn, "picker.default_sort", "time")?;
+    let order = match sort.as_str() {
+        "cost"   => "total_cost DESC, date DESC, time DESC",
+        "tokens" => "total_tokens DESC, date DESC, time DESC",
+        "calls"  => "total_calls DESC, date DESC, time DESC",
+        _        => "date DESC, time DESC",
+    };
+    let sql = format!(
         "SELECT id, file_path, project, date, time, prompt, total_calls, total_tokens, total_cost, last_model, ai_name
          FROM sessions
          WHERE (?1 IS NULL OR date >= date('now', '-' || ?1 || ' days'))
-         ORDER BY date DESC, time DESC
+         ORDER BY {}
          LIMIT 5000",
-    )?;
+        order
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let items = stmt
         .query_map([days], |row| {
             let date: String = row.get(3)?;

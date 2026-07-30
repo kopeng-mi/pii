@@ -2,8 +2,9 @@
 /target
 **/*.rs.bk
 
-# Local data — DB lives at $LOCALAPPDATA/pii/pii.db (Windows)
-# or ~/.local/share/pii/pii.db (Linux) — never in CWD.
+# Local data — dev uses ./.pii/, release uses $LOCALAPPDATA/pii/ (Win)
+# or ~/.local/share/pii/ (Linux) — never in CWD.
+.pii/
 /pii.db
 /pii.db-shm
 /pii.db-wal

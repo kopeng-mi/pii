@@ -2,17 +2,41 @@ use rusqlite::{Connection, Result};
 use std::path::PathBuf;
 
 pub fn get_db_path() -> PathBuf {
-    // OS-conventional per-user app data dir:
-    //   Windows: %LOCALAPPDATA%\pii\pii.db
-    //   Linux:   ~/.local/share/pii/pii.db
-    //   macOS:   ~/Library/Application Support/pii/pii.db
-    // Falls back to CWD if even that isn't resolvable.
-    let mut p = dirs::data_local_dir()
-        .or_else(dirs::data_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    p.push("pii");
-    p.push("pii.db");
-    p
+    // Dev builds keep state in the project root so they never pollute the
+    // system-wide dir; release builds use the OS app-data dir.
+    #[cfg(debug_assertions)]
+    {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push(".pii");
+        p.push("pii.db");
+        return p;
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // OS-conventional per-user app data dir:
+        //   Windows: %LOCALAPPDATA%\pii\pii.db
+        //   Linux:   ~/.local/share/pii/pii.db
+        //   macOS:   ~/Library/Application Support/pii/pii.db
+        // Falls back to CWD if even that isn't resolvable.
+        let mut p = dirs::data_local_dir()
+            .or_else(dirs::data_dir)
+            .unwrap_or_else(|| PathBuf::from("."));
+        p.push("pii");
+        p.push("pii.db");
+        p
+    }
+}
+
+/// Read a string setting; returns `default` if the key is absent.
+pub fn get_setting(conn: &Connection, key: &str, default: &str) -> Result<String> {
+    let v: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [key],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(v.unwrap_or_else(|| default.to_string()))
 }
 
 pub fn init_db(conn: &Connection) -> Result<()> {
@@ -62,6 +86,11 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
             value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS models (
