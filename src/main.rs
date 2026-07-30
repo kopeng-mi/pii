@@ -95,7 +95,7 @@ fn inspect_session(
         let mut total_out = 0;
 
         if show_calls {
-            let call_sql = "SELECT id, model, input_tokens, output_tokens, cost, is_error FROM calls WHERE session_id = ? ORDER BY id ASC";
+            let call_sql = "SELECT id, provider, model, input_tokens, output_tokens, cost, is_error FROM calls WHERE session_id = ? ORDER BY id ASC";
             let mut cstmt = conn.prepare(call_sql)?;
             call_rows = cstmt.query_map([session_id], |crow| {
                 Ok((
