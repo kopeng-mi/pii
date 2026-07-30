@@ -56,17 +56,31 @@ pub fn print_heatmap(conn: &Connection) -> rusqlite::Result<()> {
 
     let bucket_size = (max_tokens as f64 / 4.0).ceil() as u64;
 
-    fn get_color(tokens: u64, bucket_size: u64) -> &'static str {
+    // Palette: pick a 4-step gradient. Off is fixed at grey 236.
+    let palette = crate::db::get_setting(conn, "heatmap.palette", "teal").unwrap_or_else(|_| "teal".into());
+    // Pre-compute the four ANSI prefixes for the chosen palette.
+    let buckets: [&str; 4] = match palette.as_str() {
+        "green" => ["\x1b[38;5;34m",  "\x1b[38;5;40m",  "\x1b[38;5;46m",  "\x1b[38;5;82m"],
+        "blue"  => ["\x1b[38;5;33m",  "\x1b[38;5;39m",  "\x1b[38;5;45m",  "\x1b[38;5;81m"],
+        "amber" => ["\x1b[38;5;130m", "\x1b[38;5;136m", "\x1b[38;5;142m", "\x1b[38;5;178m"],
+        _       => ["\x1b[38;5;30m",  "\x1b[38;5;37m",  "\x1b[38;5;43m",  "\x1b[38;5;51m"],
+    };
+    let c1 = buckets[0];
+    let c2 = buckets[1];
+    let c3 = buckets[2];
+    let c4 = buckets[3];
+
+    fn get_color(tokens: u64, bucket_size: u64, c1: &'static str, c2: &'static str, c3: &'static str, c4: &'static str) -> &'static str {
         if tokens == 0 {
             "\x1b[38;5;236m"
         } else if tokens <= bucket_size {
-            "\x1b[38;5;30m"
+            c1
         } else if tokens <= bucket_size * 2 {
-            "\x1b[38;5;37m"
+            c2
         } else if tokens <= bucket_size * 3 {
-            "\x1b[38;5;43m"
+            c3
         } else {
-            "\x1b[38;5;51m"
+            c4
         }
     }
 
@@ -103,7 +117,7 @@ pub fn print_heatmap(conn: &Connection) -> rusqlite::Result<()> {
         };
 
         current_colors[day_index] = if let Some(tokens) = token_count {
-            get_color(tokens, bucket_size)
+            get_color(tokens, bucket_size, c1, c2, c3, c4)
         } else {
             ""
         };

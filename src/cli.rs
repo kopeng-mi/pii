@@ -91,4 +91,6 @@ pub enum Commands {
         /// Ranking category: coding | math | general
         category: Option<String>,
     },
+    /// Interactive settings picker
+    Settings,
 }

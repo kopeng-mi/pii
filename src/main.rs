@@ -203,6 +203,7 @@ fn print_custom_help() {
     \x1b[38;5;114mmodel [query]\x1b[0m          \x1b[38;5;242mModel detail card or interactive model picker\x1b[0m
     \x1b[38;5;114mcompare [m1 m2...]\x1b[0m     \x1b[38;5;242mCompare models side-by-side (interactive if no args) [--spider]\x1b[0m
     \x1b[38;5;114mrankings [category]\x1b[0m    \x1b[38;5;242mShow TrueSkill rankings · category: coding | math | general\x1b[0m
+    \x1b[38;5;114msettings\x1b[0m               \x1b[38;5;242mInteractive settings picker\x1b[0m
 
   \x1b[38;5;246mOPTIONS:\x1b[0m
     \x1b[38;5;114m-h, --help\x1b[0m             \x1b[38;5;242mPrint this customized help message\x1b[0m
@@ -405,6 +406,18 @@ fn main() -> rusqlite::Result<()> {
                 // Make sure we have models scored — refresh quietly if needed.
                 models::api::refresh_if_needed(&conn, false)?;
                 models::rankings::print_rankings(&conn, category.as_deref())?;
+                return Ok(());
+            }
+            cli::Commands::Settings => {
+                let changed = ui::settings::run_settings_picker(&conn)?;
+                if changed.is_empty() {
+                    println!("  \x1b[38;5;242mNo changes.\x1b[0m");
+                } else {
+                    println!("  \x1b[38;5;43m✓\x1b[0m Saved \x1b[1m{}\x1b[0m setting(s):", changed.len());
+                    for k in &changed {
+                        println!("    \x1b[38;5;246m•\x1b[0m {}", k);
+                    }
+                }
                 return Ok(());
             }
         }
