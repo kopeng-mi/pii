@@ -12,6 +12,8 @@ pub struct SessionRow {
     pub total_cost: f64,
     pub errors: u32,
     pub last_model: String,
+    /// Resolved display name: latest AI-autoname > latest session_info name > "" (caller falls back to prompt).
+    pub ai_name: String,
 }
 
 pub struct CallRow {

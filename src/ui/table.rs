@@ -151,43 +151,6 @@ pub fn print_sessions(
     Ok(())
 }
 
-/// Count visible character width of a string, ignoring ANSI escape sequences.
-pub fn ansi_visible_len(s: &str) -> usize {
-    let mut count = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip the entire CSI/OSC sequence
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for nc in chars.by_ref() {
-                    if ('@'..='~').contains(&nc) { break; }
-                }
-            } else {
-                // Generic ESC: skip until we hit an alphabetic terminator
-                for nc in chars.by_ref() {
-                    if nc.is_ascii_alphabetic() { break; }
-                }
-            }
-        } else {
-            count += 1;
-        }
-    }
-    count
-}
-
-/// Right-pad an ANSI-colored string to `width` visible chars with spaces.
-pub fn pad_end_ansi(s: &str, width: usize) -> String {
-    let visible = ansi_visible_len(s);
-    if visible >= width {
-        s.to_string()
-    } else {
-        let mut out = String::with_capacity(s.len() + (width - visible));
-        out.push_str(s);
-        for _ in 0..(width - visible) { out.push(' '); }
-        out
-    }
-}
 
 pub fn compact_num(n: u64) -> String {
     if n >= 1_000_000 {

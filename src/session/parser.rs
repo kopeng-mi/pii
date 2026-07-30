@@ -188,6 +188,12 @@ fn parse_session_file(
     let mut calls = Vec::new();
     let mut unique_models = std::collections::HashSet::new();
 
+    // Name resolution: prefer latest AI-autoname, then latest session_info, then prompt.
+    let mut ai_name = String::new();
+    let mut ai_name_ts: u64 = 0;
+    let mut info_name = String::new();
+    let mut info_name_ts: u64 = 0;
+
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -195,7 +201,32 @@ fn parse_session_file(
         };
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
             let t = value["type"].as_str().unwrap_or("");
-            if t == "session" {
+            if t == "session_info" {
+                if let Some(name) = value.get("name").and_then(|n| n.as_str()) {
+                    let ts = value.get("timestamp").and_then(|v| v.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.timestamp_millis() as u64)
+                        .unwrap_or(0);
+                    if ts >= info_name_ts {
+                        info_name_ts = ts;
+                        info_name = name.to_string();
+                    }
+                }
+            } else if t == "custom"
+                && value.get("customType").and_then(|c| c.as_str()) == Some("pi-autoname-state")
+            {
+                if let Some(data) = value.get("data").and_then(|d| d.as_object()) {
+                    if data.get("source").and_then(|s| s.as_str()) == Some("ai") {
+                        if let Some(name) = data.get("name").and_then(|n| n.as_str()) {
+                            let ts = data.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
+                            if ts >= ai_name_ts {
+                                ai_name_ts = ts;
+                                ai_name = name.to_string();
+                            }
+                        }
+                    }
+                }
+            } else if t == "session" {
                 id = value["id"].as_str().unwrap_or("").to_string();
                 timestamp = value["timestamp"].as_str().unwrap_or("").to_string();
             } else if t == "message" {
@@ -295,6 +326,7 @@ fn parse_session_file(
         total_cost,
         errors,
         last_model: String::new(), // Populated by caller after cost estimation
+        ai_name: if !ai_name.is_empty() { ai_name } else { info_name },
     };
 
     Some((session, calls))
@@ -306,8 +338,8 @@ fn insert_session(
     calls: &[CallRow],
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, models, total_calls, total_tokens, total_cost, errors, last_model)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT OR REPLACE INTO sessions (id, project, file_path, file_size, date, time, prompt, models, total_calls, total_tokens, total_cost, errors, last_model, ai_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         (
             &session.id,
             &session.project,
@@ -322,6 +354,7 @@ fn insert_session(
             session.total_cost,
             session.errors,
             &session.last_model,
+            &session.ai_name,
         ),
     )?;
 

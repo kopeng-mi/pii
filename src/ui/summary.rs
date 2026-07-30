@@ -1,36 +1,5 @@
-use crate::ui::table::{compact_num, make_bar, pad_end_ansi};
+use crate::ui::table::{compact_num, make_bar};
 use rusqlite::Connection;
-
-/// Total visible width of the box including corners.
-/// Layout: ┌─ title ─...─┐
-///        │  content    │   (content padded to BOX_WIDTH - 2)
-///        └─────────────┘
-const BOX_WIDTH: usize = 60;
-
-fn box_top(title: &str) {
-    // ┌─ title ─...─┐   total visible = BOX_WIDTH
-    let overhead = "┌─ ".len() + 1; // = 4  (trailing space before dashes)
-    let after = BOX_WIDTH - 1 - overhead - title.len(); // -1 for ┐
-    println!(
-        "  \x1b[38;5;246m┌─ {} {}\x1b[0m",
-        title,
-        "─".repeat(after)
-    );
-}
-
-fn box_row(content: String) {
-    println!(
-        "  \x1b[38;5;246m│\x1b[0m{}\x1b[38;5;246m│\x1b[0m",
-        pad_end_ansi(&content, BOX_WIDTH - 2)
-    );
-}
-
-fn box_bottom() {
-    println!(
-        "  \x1b[38;5;246m└{}┘\x1b[0m",
-        "─".repeat(BOX_WIDTH - 2)
-    );
-}
 
 pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
     let sql = "
@@ -110,71 +79,66 @@ pub fn print_summary(conn: &Connection) -> rusqlite::Result<()> {
     let max_model_calls = top_models.first().map(|m| m.1).unwrap_or(1);
 
     // ── Header ──
-    println!("\n  \x1b[38;5;43m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
-    println!("  \x1b[38;5;43m◈\x1b[0m \x1b[1mSummary Dashboard\x1b[0m");
-    println!("  \x1b[38;5;43m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
+    let h = "Summary Dashboard";
+    println!("\n  \x1b[1m{}\x1b[0m", h);
+    println!("  \x1b[38;5;51m{}\x1b[0m\n", "━".repeat(h.chars().count()));
 
     // ── All Time ──
-    box_top("All Time");
-    box_row(format!(
-        "  \x1b[38;5;43m◈\x1b[0m Sessions  \x1b[1m{}\x1b[0m    \x1b[38;5;220m⚡\x1b[0m Calls    \x1b[1m{}\x1b[0m",
-        total_sess, total_call
-    ));
-    box_row(format!(
-        "  \x1b[38;5;114m◆\x1b[0m Tokens    \x1b[1m{}\x1b[0m    \x1b[38;5;220m$\x1b[0m Cost      \x1b[1m\x1b[38;5;220m${:.2}\x1b[0m",
-        compact_num(total_toks as u64), total_c
-    ));
+    let h = "All Time";
+    println!("  \x1b[38;5;51m{}\x1b[0m", h);
+    println!("  \x1b[38;5;237m{}\x1b[0m", "─".repeat(h.chars().count()));
+    println!(
+        "    {:8} \x1b[1m{:>6}\x1b[0m    {:6} \x1b[1m{:>8}\x1b[0m",
+        "Sessions", total_sess, "Calls", total_call
+    );
+    println!(
+        "    {:8} \x1b[1m{:>6}\x1b[0m    {:6} \x1b[1m\x1b[38;5;220m${:.2}\x1b[0m",
+        "Tokens", compact_num(total_toks as u64), "Cost", total_c
+    );
     if total_errs > 0 {
-        box_row(format!(
-            "  \x1b[38;5;196m✗\x1b[0m Errors    \x1b[38;5;196m{}\x1b[0m",
-            total_errs
-        ));
+        println!(
+            "    {:8} \x1b[38;5;196m{}\x1b[0m",
+            "Errors", total_errs
+        );
     }
     if let Some((proj, cnt)) = &top_project {
-        box_row(format!(
-            "  \x1b[38;5;43m▸\x1b[0m Top Proj  \x1b[1m{}\x1b[0m \x1b[38;5;242m({} sessions)\x1b[0m",
-            crate::ui::table::truncate(proj, 18), cnt
-        ));
+        println!(
+            "    {:8} \x1b[1m{}\x1b[0m \x1b[38;5;242m({} sessions)\x1b[0m",
+            "Top Proj", crate::ui::table::truncate(proj, 18), cnt
+        );
     }
-    box_bottom();
     println!();
 
     // ── Today vs Average ──
-    box_top("Today vs Daily Avg");
-    let today_marker = if today_sess as f64 > avg_daily_sess { "\x1b[38;5;43m▲\x1b[0m" } else if today_sess == 0 { "\x1b[38;5;242m·\x1b[0m" } else { "\x1b[38;5;246m▸\x1b[0m" };
-    box_row(format!(
-        "  {} Sessions  \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {:.1} avg/day\x1b[0m",
-        today_marker, today_sess, avg_daily_sess
-    ));
-    box_row(format!(
-        "    Calls      \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {} tokens\x1b[0m",
-        today_calls, compact_num(today_toks as u64)
-    ));
-    let cost_marker = if today_cost > avg_daily_cost && today_cost > 0.0 { "\x1b[38;5;220m▲\x1b[0m" } else { " " };
-    box_row(format!(
-        "  {} Cost       \x1b[38;5;220m${:.2}\x1b[0m \x1b[38;5;242mtoday\x1b[0m \x1b[38;5;242m/ ${:.2} avg/day\x1b[0m",
-        cost_marker, today_cost, avg_daily_cost
-    ));
-    box_bottom();
+    let h = "Today vs Daily Avg";
+    println!("  \x1b[38;5;51m{}\x1b[0m", h);
+    println!("  \x1b[38;5;237m{}\x1b[0m", "─".repeat(h.chars().count()));
+    println!(
+        "    {:8} \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {:.1} avg/day\x1b[0m",
+        "Sessions", today_sess, avg_daily_sess
+    );
+    println!(
+        "    {:8} \x1b[1m{}\x1b[0m \x1b[38;5;242mtoday\x1b[0m   \x1b[38;5;242m/ {} tokens\x1b[0m",
+        "Calls", today_calls, compact_num(today_toks as u64)
+    );
+    println!(
+        "    {:8} \x1b[38;5;220m${:.2}\x1b[0m \x1b[38;5;242mtoday\x1b[0m \x1b[38;5;242m/ ${:.2} avg/day\x1b[0m",
+        "Cost", today_cost, avg_daily_cost
+    );
     println!();
 
     // ── Top Models ──
-    println!("  \x1b[38;5;246mTop Models\x1b[0m");
-    println!("  \x1b[38;5;237m────────────────────────────────────────────────────────\x1b[0m");
-    for (i, (m, calls, tokens, cost)) in top_models.iter().enumerate() {
+    let h = "Top Models";
+    println!("  \x1b[38;5;51m{}\x1b[0m", h);
+    println!("  \x1b[38;5;237m{}\x1b[0m", "─".repeat(h.chars().count()));
+    for (m, calls, tokens, cost) in top_models.iter() {
         let model_fmt = crate::ui::table::truncate(m, 20);
-        let rank_icon = match i {
-            0 => "\x1b[38;5;220m◆\x1b[0m",
-            1 => "\x1b[38;5;246m◆\x1b[0m",
-            2 => "\x1b[38;5;130m◆\x1b[0m",
-            _ => "\x1b[38;5;237m·\x1b[0m",
-        };
         let bar = make_bar(*calls as f64, max_model_calls as f64, 8);
         let cost_fmt = format!("${:>6.2}", cost);
         let tokens_str = compact_num(*tokens as u64);
         println!(
-            "  {} \x1b[38;5;114m{:<20}\x1b[0m  {} {:>5} calls  {:>6} tk  \x1b[38;5;220m{}\x1b[0m",
-            rank_icon, model_fmt, bar, calls, tokens_str, cost_fmt
+            "    \x1b[38;5;114m{:<20}\x1b[0m  {} {:>5} calls  {:>6} tk  \x1b[38;5;220m{}\x1b[0m",
+            model_fmt, bar, calls, tokens_str, cost_fmt
         );
     }
     println!();

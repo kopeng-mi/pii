@@ -50,7 +50,7 @@ pub fn run_picker(
     // keystroke time. Cap rows so we don't materialize tens of thousands on
     // startup. Increase this once `--all` lands.
     let mut stmt = conn.prepare(
-        "SELECT id, file_path, project, date, time, prompt, total_calls, total_tokens, total_cost, last_model
+        "SELECT id, file_path, project, date, time, prompt, total_calls, total_tokens, total_cost, last_model, ai_name
          FROM sessions
          WHERE (?1 IS NULL OR date >= date('now', '-' || ?1 || ' days'))
          ORDER BY date DESC, time DESC
@@ -66,6 +66,13 @@ pub fn run_picker(
             let cost: f64 = row.get(8)?;
             let model: String = row.get(9)?;
             let first_prompt: String = row.get(5)?;
+            let ai_name: String = row.get::<_, Option<String>>(10)?.unwrap_or_default();
+            // Name resolution: AI name > session_info name > first prompt
+            let display_name = if !ai_name.is_empty() {
+                ai_name
+            } else {
+                first_prompt
+            };
             Ok((
                 Selection {
                     id: row.get(0)?,
@@ -84,7 +91,7 @@ pub fn run_picker(
                     } else {
                         "--".into()
                     },
-                    first_prompt.replace(['\n', '\r'], " ")
+                    display_name.replace(['\n', '\r'], " ")
                 ),
             ))
         })?

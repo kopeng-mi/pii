@@ -39,7 +39,8 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             total_tokens INTEGER DEFAULT 0,
             total_cost  REAL DEFAULT 0.0,
             errors      INTEGER DEFAULT 0,
-            last_model  TEXT DEFAULT ''
+            last_model  TEXT DEFAULT '',
+            ai_name     TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS calls (
@@ -131,6 +132,7 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         ",
     )?;
     migrate_sessions_fts(conn)?;
+    migrate_sessions_ai_name(conn)?;
     Ok(())
 }
 
@@ -186,5 +188,21 @@ fn migrate_sessions_fts(conn: &Connection) -> Result<()> {
     )?;
     pb.tick((total as u64).max(1));
     pb.finish();
+    Ok(())
+}
+
+/// Add `ai_name` column to existing `sessions` table if upgrading.
+fn migrate_sessions_ai_name(conn: &Connection) -> Result<()> {
+    let has_col: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'ai_name')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !has_col {
+        eprintln!("  [migrate] adding sessions.ai_name column");
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN ai_name TEXT DEFAULT ''")?;
+    }
     Ok(())
 }

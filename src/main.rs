@@ -73,7 +73,7 @@ fn inspect_session(
     show_calls: bool,
 ) -> rusqlite::Result<()> {
     // Fetch session details
-    let sql = "SELECT id, project, date, time, prompt, total_calls, total_tokens, total_cost, errors FROM sessions WHERE id = ?";
+    let sql = "SELECT id, project, date, time, prompt, total_calls, total_tokens, total_cost, errors, ai_name FROM sessions WHERE id = ?";
     let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query([session_id])?;
 
@@ -87,6 +87,7 @@ fn inspect_session(
         let mut tokens: u64 = row.get::<_, u32>(6)? as u64;
         let mut cost: f64 = row.get(7)?;
         let errs: u32 = row.get(8)?;
+        let ai_name: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
 
         let mut call_rows = Vec::new();
         let mut max_call_tokens = 1.0;
@@ -120,6 +121,9 @@ fn inspect_session(
         println!("  \x1b[38;5;246mID:\x1b[0m      {}", id);
         println!("  \x1b[38;5;246mProject:\x1b[0m {}", project);
         println!("  \x1b[38;5;246mDate:\x1b[0m    {} {}", date, time);
+        if !ai_name.is_empty() {
+            println!("  \x1b[38;5;246mName:\x1b[0m    \x1b[1m\x1b[38;5;51m{}\x1b[0m", ai_name);
+        }
         println!("  \x1b[38;5;246mCalls:\x1b[0m   {}", calls);
         
         if total_in > 0 || total_out > 0 {
