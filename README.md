@@ -51,3 +51,17 @@ Without keys `pii` still works on local session data.
 ## Notes
 
 First run scans and parses all session JSONL files. After that it's incremental: only new or changed files get re-parsed. The picker is fuzzy on top of FTS5, so searching across thousands of sessions stays fast.
+
+## Tree picker
+
+`pii -i` and `pii -c` open a tree view by default. The first column is a list of project folders; the second column is the session tree inside the open folder. Move with the arrow keys.
+
+- `↑` / `↓`: move the cursor. When the cursor lands on a folded project folder, the folder opens and any other open folder closes.
+- `←`: collapse the current folder, or jump to the parent session.
+- `→`: open the current folder, or step into the first child session.
+- `Enter`: select the highlighted session.
+- `Esc`: quit.
+
+Each session shows a name, a cost column, and a relative age (`1d`, `2h`, `today`). Sessions without children drop the chevron so the column lines up.
+
+To switch back to the flat fuzzy picker, set `pii settings` → `Picker view` to `list`.
